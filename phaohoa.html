@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pháo hoa Canvas</title>
+  <style>
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: radial-gradient(1200px 800px at 50% 100%, #000014 0%, #000008 40%, #000 100%);
+      overflow: hidden;
+      font-family: system-ui, sans-serif;
+      color: #ddd;
+    }
+    #ui {
+      position: fixed;
+      left: 16px;
+      top: 16px;
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid rgba(255,255,255,0.12);
+      padding: 8px 10px;
+      border-radius: 10px;
+      backdrop-filter: blur(6px);
+    }
+    #ui label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+    }
+    #ui input[type="range"] {
+      width: 150px;
+    }
+    #ui button, #ui select {
+      background: rgba(255,255,255,0.08);
+      border: 1px solid rgba(255,255,255,0.18);
+      color: #eee;
+      padding: 6px 10px;
+      border-radius: 8px;
+      cursor: pointer;
+    }
+    #ui button:hover, #ui select:hover {
+      background: rgba(255,255,255,0.14);
+    }
+    canvas {
+      display: block;
+    }
+    .credits {
+      position: fixed;
+      right: 16px;
+      bottom: 12px;
+      font-size: 12px;
+      color: rgba(255,255,255,0.6);
+      user-select: none;
+    }
+  </style>
+</head>
+<body>
+  <div id="ui">
+    <label>
+      Số pháo:
+      <input id="rate" type="range" min="0" max="100" value="35">
+    </label>
+    <label>
+      Gió:
+      <input id="wind" type="range" min="-0.2" max="0.2" step="0.005" value="0">
+    </label>
+    <label>
+      Chủ đề:
+      <select id="theme">
+        <option value="mixed">Ngẫu nhiên</option>
+        <option value="warm">Ấm áp</option>
+        <option value="cool">Mát lạnh</option>
+        <option value="neon">Neon</option>
+        <option value="gold">Vàng kim</option>
+      </select>
+    </label>
+    <button id="clear">Dọn khói</button>
+  </div>
+  <canvas id="c"></canvas>
+  <div class="credits">Nhấp/ chạm để bắn pháo • Chúc mừng!</div>
+
+  <script>
+    const canvas = document.getElementById('c');
+    const ctx = canvas.getContext('2d');
+    const rateEl = document.getElementById('rate');
+    const windEl = document.getElementById('wind');
+    const themeEl = document.getElementById('theme');
+    const clearBtn = document.getElementById('clear');
+
+    let W, H, dpr;
+    const gravity = 0.12;      // gia tốc rơi của tàn pháo
+    let wind = 0.0;            // gió ngang
+    let autoRate = 35;         // số pháo mỗi phút giả lập
+    const rockets = [];
+    const particles = [];
+    const sparks = [];
+    const smoke = [];
+
+    function resize() {
+      dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+      W = canvas.width = Math.floor(window.innerWidth * dpr);
+      H = canvas.height = Math.floor(window.innerHeight * dpr);
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.scale(dpr, dpr);
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Tiện ích
+    const rand = (a, b) => a + Math.random() * (b - a);
+    const pick = arr => arr[(Math.random() * arr.length) | 0];
+    const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+    const lerp = (a, b, t) => a + (b - a) * t;
+
+    // Bảng màu theo chủ đề
+    function palette(theme) {
+      switch (theme) {
+        case 'warm': return ['#ff5e5b', '#ffbe0b', '#f49f0a', '#fb5607', '#ff006e'];
+        case 'cool': return ['#00f5d4', '#00bbf9', '#3a86ff', '#6c77ff', '#80ed99'];
+        case 'neon': return ['#39ff14', '#ff073a', '#00f0ff', '#fffb00', '#ff00f7'];
+        case 'gold': return ['#ffd166', '#fcbf49', '#f6bd60', '#e9c46a', '#ffda77'];
+        default: return ['#ff595e','#ffca3a','#8ac926','#1982c4','#6a4c93','#ffd6a5','#caffbf'];
+      }
+    }
+
+    // Tạo rocket bay lên
+    function spawnRocket(x, y) {
+      const targetY = rand(H * 0.18, H * 0.35);
+      rockets.push({
+        x, y,
+        vx: rand(-0.8, 0.8) + wind * 8,
+        vy: rand(-10.5, -13.5),
+        life: rand(0.8, 1.2),
+        color: pick(palette(themeEl.value)),
+        exploded: false,
+        sparkleTimer: 0
+      });
+    }
+
+    // Nổ rocket thành particles
+    function explode(rocket) {
+      const count = Math.floor(rand(80, 160));
+      const angleBase = Math.random() * Math.PI * 2;
+      const spread = rand(0.8, 1.2);
+      for (let i = 0; i < count; i++) {
+        const a = angleBase + (i / count) * Math.PI * 2 * spread + rand(-0.05, 0.05);
+        const speed = rand(2.2, 5.5);
+        const c = Math.random() < 0.12 ? pick(palette(themeEl.value)) : rocket.color;
+        particles.push({
+          x: rocket.x, y: rocket.y,
+          vx: Math.cos(a) * speed + wind * rand(0.5, 1.8),
+          vy: Math.sin(a) * speed,
+          alpha: 1,
+          size: rand(1.1, 2.3),
+          decay: rand(0.007, 0.018),
+          color: c,
+          glitter: Math.random() < 0.25
+        });
+      }
+      // Khói nhẹ
+      for (let s = 0; s < 24; s++) {
+        smoke.push({
+          x: rocket.x + rand(-4, 4),
+          y: rocket.y + rand(-4, 4),
+          r: rand(8, 22),
+          alpha: 0.35,
+          va: rand(-0.006, -0.014),
+          vx: wind * rand(12, 22),
+          vy: rand(-0.5, 0.5)
+        });
+      }
+    }
+
+    function update(dt) {
+      wind = parseFloat(windEl.value);
+      autoRate = parseInt(rateEl.value, 10);
+
+      // Tự động bắn
+      if (Math.random() < dt * (autoRate / 60)) {
+        const x = rand(50, window.innerWidth - 50);
+        spawnRocket(x, window.innerHeight + rand(10, 40));
+      }
+
+      // Rocket
+      for (let i = rockets.length - 1; i >= 0; i--) {
+        const r = rockets[i];
+        r.vy += gravity * 0.25;
+        r.vx += wind * 0.18;
+        r.x += r.vx;
+        r.y += r.vy;
+
+        r.sparkleTimer -= dt;
+        if (r.sparkleTimer <= 0) {
+          r.sparkleTimer = rand(0.02, 0.06);
+          sparks.push({
+            x: r.x + rand(-0.5, 0.5),
+            y: r.y + rand(-0.5, 0.5),
+            vx: rand(-0.2, 0.2),
+            vy: rand(0.3, 0.8),
+            alpha: 0.9,
+            color: r.color,
+            size: rand(0.8, 1.4),
+            decay: rand(0.02, 0.05)
+          });
+        }
+
+        if (!r.exploded && r.vy >= -1.2) {
+          r.exploded = true;
+          explode(r);
+          rockets.splice(i, 1);
+        } else if (r.y < H * 0.18) {
+          // Nổ đỉnh sớm
+          r.exploded = true;
+          explode(r);
+          rockets.splice(i, 1);
+        } else if (r.y > H + 80 || r.x < -50 || r.x > W + 50) {
+          rockets.splice(i, 1);
+        }
+      }
+
+      // Particles
+      for (let i = particles.length - 1; i >= 0; i--) {
+        const p = particles[i];
+        p.vy += gravity * 0.12;
+        p.vx += wind * 0.02;
+        p.x += p.vx;
+        p.y += p.vy;
+        p.alpha -= p.decay;
+        if (p.glitter && Math.random() < 0.3) {
+          sparks.push({
+            x: p.x, y: p.y,
+            vx: rand(-0.6, 0.6),
+            vy: rand(-0.6, 0.6),
+            alpha: 0.9,
+            color: p.color,
+            size: rand(0.7, 1.2),
+            decay: rand(0.04, 0.08)
+          });
+        }
+        if (p.alpha <= 0 || p.y > H + 40) particles.splice(i, 1);
+      }
+
+      // Sparks
+      for (let i = sparks.length - 1; i >= 0; i--) {
+        const s = sparks[i];
+        s.vy += gravity * 0.05;
+        s.vx += wind * 0.02;
+        s.x += s.vx;
+        s.y += s.vy;
+        s.alpha -= s.decay;
+        if (s.alpha <= 0) sparks.splice(i, 1);
+      }
+
+      // Smoke
+      for (let i = smoke.length - 1; i >= 0; i--) {
+        const m = smoke[i];
+        m.x += m.vx * dt * 30;
+        m.y += m.vy * dt * 30;
+        m.alpha += m.va;
+        if (m.alpha <= 0) smoke.splice(i, 1);
+      }
+    }
+
+    function drawBackground() {
+      // Nhẹ nhàng tô nền đêm + sao
+      ctx.save();
+      // Sao lấp lánh đơn giản
+      for (let i = 0; i < 40; i++) {
+        const x = (i * 97 % window.innerWidth);
+        const y = (i * 53 % (window.innerHeight * 0.6));
+        const a = 0.25 + Math.sin(Date.now() * 0.001 + i) * 0.15;
+        ctx.fillStyle = `rgba(255,255,255,${a})`;
+        ctx.fillRect(x, y, 1, 1);
+      }
+      ctx.restore();
+    }
+
+    function draw() {
+      // Vệt mờ để giữ "khói" và cảm giác chuyển động
+      ctx.globalCompositeOperation = 'source-over';
+      ctx.fillStyle = 'rgba(0,0,0,0.18)';
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+
+      drawBackground();
+
+      // Smoke
+      ctx.globalCompositeOperation = 'lighter';
+      for (const m of smoke) {
+        const g = ctx.createRadialGradient(m.x, m.y, 0, m.x, m.y, m.r);
+        g.addColorStop(0, `rgba(200,200,210,${m.alpha * 0.35})`);
+        g.addColorStop(1, `rgba(120,120,140,0)`);
+        ctx.fillStyle = g;
+        ctx.beginPath();
+        ctx.arc(m.x, m.y, m.r, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Particles
+      for (const p of particles) {
+        ctx.shadowBlur = 12;
+        ctx.shadowColor = p.color;
+        ctx.fillStyle = p.color;
+        ctx.globalAlpha = Math.max(0, p.alpha);
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, p.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+
+      // Rockets trail
+      for (const s of sparks) {
+        ctx.shadowBlur = 10;
+        ctx.shadowColor = s.color;
+        ctx.fillStyle = s.color;
+        ctx.globalAlpha = Math.max(0, s.alpha);
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.size, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+      ctx.globalCompositeOperation = 'source-over';
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      const dt = Math.min(0.033, (now - last) / 1000);
+      last = now;
+      update(dt);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    requestAnimationFrame(loop);
+
+    // Tương tác
+    function toCanvasPos(e) {
+      const r = canvas.getBoundingClientRect();
+      const x = (e.clientX !== undefined ? e.clientX : e.touches[0].clientX) - r.left;
+      const y = (e.clientY !== undefined ? e.clientY : e.touches[0].clientY) - r.top;
+      return { x, y };
+    }
+    window.addEventListener('pointerdown', e => {
+      const { x, y } = toCanvasPos(e);
+      spawnRocket(x, window.innerHeight + 20);
+    });
+    window.addEventListener('pointermove', e => {
+      if (e.pressure > 0 || e.buttons) {
+        const { x } = toCanvasPos(e);
+        if (Math.random() < 0.6) spawnRocket(x + rand(-10, 10), window.innerHeight + 20);
+      }
+    });
+    clearBtn.addEventListener('click', () => {
+      particles.length = 0;
+      rockets.length = 0;
+      sparks.length = 0;
+      smoke.length = 0;
+      ctx.fillStyle = 'rgba(0,0,0,0.6)';
+      ctx.fillRect(0, 0, window.innerWidth, window.innerHeight);
+    });
+
+    // Khởi tạo vài quả đầu tiên
+    for (let i = 0; i < 4; i++) {
+      setTimeout(() => spawnRocket(rand(60, window.innerWidth - 60), window.innerHeight + 10), i * 350);
+    }
+  </script>
+</body>
+</html>
